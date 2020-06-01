@@ -94,6 +94,9 @@ func (dbc *DatabaseCfg) InitDB() {
 	if err = dbc.x.Sync(new(MeasurementCfg)); err != nil {
 		log.Fatalf("Fail to sync database MeasurementCfg: %v\n", err)
 	}
+	if err = dbc.x.Sync(new(MeasurementSubCfg)); err != nil {
+		log.Fatalf("Fail to sync database MeasurementSubCfg: %v\n", err)
+	}
 	if err = dbc.x.Sync(new(MeasFilterCfg)); err != nil {
 		log.Fatalf("Fail to sync database MeasurementFilterCfg : %v\n", err)
 	}
