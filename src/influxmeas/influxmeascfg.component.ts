@@ -125,6 +125,8 @@ export class InfluxMeasCfgComponent {
         controlArray.push({'ID': 'IndexTag', 'defVal' : '', 'Validators' : Validators.required});
         controlArray.push({'ID': 'IndexTagFormat', 'defVal' : ''});
         controlArray.push({'ID': 'IndexAsValue', 'defVal' : 'false', 'Validators' : Validators.required});
+      case 'indexed_composite':
+        controlArray.push({'ID': 'IndexOID', 'defVal' : '', 'Validators' : Validators.compose([ValidationService.OIDValidator, Validators.required])});
       break;
       default:
         break;
