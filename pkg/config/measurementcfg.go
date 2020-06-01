@@ -8,16 +8,30 @@ import (
 	"github.com/toni-moreno/snmpcollector/pkg/data/utils"
 )
 
+//MeasurementSubCfg
+type MeasurementSubCfg struct {
+        MeasurementCfgID string `xorm:"id_measurement_cfg" binding:"Required"`
+	IndexFrom        string `xorm:"indexfrom" binding:"Required"`
+        IndexTo          string `xorm:"indexto" binding:"Required"`
+        GetMode          string `xorm:"getmode" binding:"In(indexed,indexed_it)"` //indexed  (direct tag), indexed_it ( indirect_tag)
+        IndexOID         string `xorm:"indexoid"`                                 //only valid if Indexed (direct or indirect)
+        TagOID           string `xorm:"tagoid"`                                   //only valid if inderecta TAG indexeded
+        IndexTag         string `xorm:"indextag"`
+        IndexTagFormat   string `xorm:"indextagformat"`
+        IndexAsValue     bool   `xorm:"'indexasvalue' default 0"`
+}
+
 //MeasurementCfg the measurement configuration
 type MeasurementCfg struct {
 	ID             string `xorm:"'id' unique" binding:"Required"`
 	Name           string `xorm:"name" binding:"Required"`
-	GetMode        string `xorm:"getmode" binding:"In(value,indexed,indexed_it)"` //value ,indexed  (direct tag), indexed_it ( indirect_tag)
-	IndexOID       string `xorm:"indexoid"`                                       //only valid if Indexed (direct or indirect)
-	TagOID         string `xorm:"tagoid"`                                         //only valid if inderecta TAG indexeded
+	GetMode        string `xorm:"getmode" binding:"In(value,indexed,indexed_it,indexed_composite)"` //value ,indexed  (direct tag), indexed_it ( indirect_tag), indexed_composite
+	IndexOID       string `xorm:"indexoid"`                                                         //only valid if Indexed (direct, indirect, or composite)
+	TagOID         string `xorm:"tagoid"`                                                           //only valid if inderecta TAG indexeded
 	IndexTag       string `xorm:"indextag"`
 	IndexTagFormat string `xorm:"indextagformat"`
 	IndexAsValue   bool   `xorm:"'indexasvalue' default 0"`
+	SubConfigs []*MeasurementSubCfg `xorm:"-"` //only valid if composite indexed
 	Fields         []struct {
 		ID     string
 		Report int
@@ -185,6 +199,14 @@ func (mc *MeasurementCfg) Init(MetricCfg *map[string]*SnmpMetricCfg, varmap map[
 				return errors.New("Bad BaseOid format:" + mc.TagOID + "  for  indirect TAG OID in metric Config " + mc.ID)
 			}
 		}
+
+	case "indexed_composite":
+		if len(mc.IndexOID) == 0 {
+                        return errors.New("Composite indexed measurement with no IndexOID in measurement Config " + mc.ID)
+                }
+                if !strings.HasPrefix(mc.IndexOID, ".") {
+                        return errors.New("Bad BaseOid format:" + mc.IndexOID + " in metric Config " + mc.ID)
+                }
 
 	case "value":
 	default:
@@ -359,6 +381,21 @@ func (dbc *DatabaseCfg) GetMeasurementCfgArray(filter string) ([]*MeasurementCfg
 			}
 		}
 	}
+
+	var MeasurementSubCfg []*MeasurementSubCfg
+	if err = dbc.x.Find(&MeasurementSubCfg); err != nil {
+		log.Warnf("Fail to get Measurements Sub Configs relationship data: %v\n", err)
+	}
+
+	//Load Measurements and Measurement Sub Configs relationship
+	for _, mVal := range devices {
+                for _, ms := range MeasurementSubCfg {
+			if ms.MeasurementCfgID == mVal.ID {
+				mVal.SubConfigs = append(mVal.SubConfigs, ms)
+			}
+		}
+	}
+
 	return devices, nil
 }
 
@@ -399,6 +436,26 @@ func (dbc *DatabaseCfg) AddMeasurementCfg(dev MeasurementCfg) (int64, error) {
 			return 0, err
 		}
 	}
+	//Measurement Sub Configs
+	for _, subconfig := range dev.SubConfigs {
+
+		msstruct := MeasurementSubCfg{
+			MeasurementCfgID: dev.ID,
+			IndexFrom:        subconfig.IndexFrom,
+			IndexTo:          subconfig.IndexTo,
+			GetMode:          subconfig.GetMode,
+			IndexOID:         subconfig.IndexOID,
+			TagOID:           subconfig.TagOID,
+			IndexTag:         subconfig.IndexTag,
+			IndexTagFormat:   subconfig.IndexTagFormat,
+			IndexAsValue:     subconfig.IndexAsValue,
+		}
+		_, err = session.Insert(&msstruct)
+		if err != nil {
+			session.Rollback()
+			return 0, err
+		}
+	}
 	//no other relation
 	err = session.Commit()
 	if err != nil {
@@ -433,6 +490,13 @@ func (dbc *DatabaseCfg) DelMeasurementCfg(id string) (int64, error) {
 	if err != nil {
 		session.Rollback()
 		return 0, fmt.Errorf("Error on Update FilterMeasurement on with id: %s, error: %s", id, err)
+	}
+
+	// deleting Measurement Sub Configs
+	_, err = session.Where("id_measurement_cfg='" + id + "'").Delete(&MeasurementSubCfg{})
+	if err != nil {
+		session.Rollback()
+		return 0, fmt.Errorf("Error on Delete Measurement Sub Config withid %s, error: %s", id, err)
 	}
 
 	//CustomFilter Related Dev
@@ -517,6 +581,34 @@ func (dbc *DatabaseCfg) UpdateMeasurementCfg(id string, dev MeasurementCfg) (int
 			return 0, err
 		}
 	}
+	//delete all previous values
+	_, err = session.Where("id_measurement_cfg='" + id + "'").Delete(&MeasurementSubCfg{})
+	if err != nil {
+		session.Rollback()
+		return 0, fmt.Errorf("Error on Delete Measurement Sub Configs with id: %s, error: %s", id, err)
+	}
+
+	//Creating new Measurement Sub Configs
+	for _, subconfig := range dev.SubConfigs {
+
+		msstruct := MeasurementSubCfg{
+			MeasurementCfgID: dev.ID,
+			IndexFrom:        subconfig.IndexFrom,
+			IndexTo:          subconfig.IndexTo,
+			GetMode:          subconfig.GetMode,
+			IndexOID:         subconfig.IndexOID,
+			TagOID:           subconfig.TagOID,
+			IndexTag:         subconfig.IndexTag,
+			IndexTagFormat:   subconfig.IndexTagFormat,
+			IndexAsValue:     subconfig.IndexAsValue,
+		}
+		_, err = session.Insert(&msstruct)
+		if err != nil {
+			session.Rollback()
+			return 0, err
+		}
+	}
+
 	//update data
 	affected, err = session.Where("id='" + id + "'").UseBool().AllCols().Update(dev)
 	if err != nil {
